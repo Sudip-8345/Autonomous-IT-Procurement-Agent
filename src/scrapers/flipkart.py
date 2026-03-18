@@ -1,11 +1,15 @@
 from urllib.parse import urljoin
-
+import logging
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 from src.config import DEFAULT_TIMEOUT_MS, FLIPKART_BASE_URL
 from src.schemas import ProductCandidate
-from src.scrapers.common import (
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+from src.scrapers.utils import (
     build_search_query,
     clean_price_to_inr,
     open_context,
@@ -21,12 +25,12 @@ def _flipkart_listing_links(page, max_results: int) -> list[dict[str, str]]:
     # Try multiple known Flipkart search-result card selectors
     card_selectors = [
         "div[data-id] a[href*='/p/']",   # newer layout
-        "a.CGtC98",                       # product card anchor (recent)
+        "a.CGtC98",                       # product card anchor
         "a._1fQZEK",                      # older layout
         "a.s1Q9rs",                       # another variant
         "a[href*='/p/']",                 # broadest fallback
     ]
-
+ 
     anchors = []
     for sel in card_selectors:
         anchors = page.query_selector_all(sel)
@@ -70,10 +74,6 @@ def _try_text(page, selectors: list[str]) -> str:
         if val:
             return val
     return ""
-
-
-def _soup_text(node) -> str:
-    return node.get_text(" ", strip=True) if node else ""
 
 
 def _extract_from_ld_json(soup: BeautifulSoup) -> tuple[str, str]:
@@ -204,7 +204,7 @@ def search_flipkart_products(query_parts: list[str], max_results: int) -> list[P
     query = build_search_query(query_parts)
     search_url = f"{FLIPKART_BASE_URL}/search?q={query}"
     candidates: list[ProductCandidate] = []
-    print(f"[Flipkart] Search started | max={max_results}", flush=True)
+    logger.info(f"[Flipkart] Search started | max={max_results}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -224,13 +224,13 @@ def search_flipkart_products(query_parts: list[str], max_results: int) -> list[P
                 break
 
         listing_items = _flipkart_listing_links(page, max_results=max_results)
-        print(f"[Flipkart] Listing links found: {len(listing_items)}", flush=True)
+        logger.info(f"[Flipkart] Listing links found: {len(listing_items)}")
 
         for item in listing_items:
             polite_delay()
             product_page = context.new_page()
             try:
-                print(f"[Flipkart] Visiting: {item['url']}", flush=True)
+                logger.info(f"[Flipkart] Visiting: {item['url']}")
                 product_page.goto(item["url"], wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT_MS)
                 # Wait for spec table or highlights to render
                 try:
@@ -261,7 +261,7 @@ def search_flipkart_products(query_parts: list[str], max_results: int) -> list[P
                         specs_map=specs_map,
                     )
                 )
-                print(f"[Flipkart] Added: {name[:80]}", flush=True)
+                logger.info(f"[Flipkart] Added: {name[:80]}")
             except Exception:
                 continue
             finally:
@@ -270,5 +270,5 @@ def search_flipkart_products(query_parts: list[str], max_results: int) -> list[P
         context.close()
         browser.close()
 
-    print(f"[Flipkart] Search done | candidates={len(candidates)}", flush=True)
+    logger.info(f"[Flipkart] Search done | candidates={len(candidates)}")
     return candidates

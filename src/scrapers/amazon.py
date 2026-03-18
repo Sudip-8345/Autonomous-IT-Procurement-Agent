@@ -1,17 +1,20 @@
 from urllib.parse import urljoin
-
+import logging
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 from playwright_stealth.stealth import Stealth
 
 from src.config import AMAZON_BASE_URL, DEFAULT_TIMEOUT_MS
 from src.schemas import ProductCandidate
-from src.scrapers.common import (
+from src.scrapers.utils import (
     build_search_query,
     clean_price_to_inr,
     open_context,
     polite_delay,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def _txt(node) -> str:
@@ -31,7 +34,7 @@ def _amazon_listing_links(page_html: str, max_results: int) -> list[dict[str, st
             continue
 
         dp_links = row.select("a[href*='/dp/']")
-        if not dp_links:
+        if not dp_links: # No product link found in this row
             continue
 
         title = (
@@ -79,8 +82,8 @@ def _amazon_extract_specs_from_html(product_html: str) -> tuple[str, dict[str, s
         price = f"₹{price}"
 
     for row in soup.select("#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr, #technicalSpecifications_feature_div tr"):
-        key_node = row.select_one("th")
-        val_node = row.select_one("td")
+        key_node = row.select_one("th") # table header as key
+        val_node = row.select_one("td") # table data as value
         key = _txt(key_node).rstrip(":")
         val = _txt(val_node)
         if key and val:
@@ -103,7 +106,7 @@ def search_amazon_products(query_parts: list[str], max_results: int) -> list[Pro
     query = build_search_query(query_parts)
     search_url = f"{AMAZON_BASE_URL}/s?k={query}"
     candidates: list[ProductCandidate] = []
-    print(f"[Amazon] Search started | max={max_results}", flush=True)
+    print(f"[Amazon] Search started | max={max_results}")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
@@ -124,11 +127,11 @@ def search_amazon_products(query_parts: list[str], max_results: int) -> list[Pro
             pass
 
         listing_items = _amazon_listing_links(page.content(), max_results=max_results)
-        print(f"[Amazon] Listing links found: {len(listing_items)}", flush=True)
+        logger.info(f"[Amazon] Listing links found: {len(listing_items)}")
         if not listing_items:
             context.close()
             browser.close()
-            print("[Amazon] No listings found", flush=True)
+            logger.info("[Amazon] No listings found")
             return candidates
 
         product_page = context.new_page()
@@ -137,7 +140,7 @@ def search_amazon_products(query_parts: list[str], max_results: int) -> list[Pro
         for item in listing_items:
             polite_delay(multiplier=0.15)
             try:
-                print(f"[Amazon] Visiting: {item['url']}", flush=True)
+                logger.info(f"[Amazon] Visiting: {item['url']}")
                 try:
                     product_page.goto(item["url"], wait_until="domcontentloaded", timeout=min(DEFAULT_TIMEOUT_MS, 18000))
                 except Exception:
@@ -166,7 +169,7 @@ def search_amazon_products(query_parts: list[str], max_results: int) -> list[Pro
                         specs_map=specs_map,
                     )
                 )
-                print(f"[Amazon] Added: {name[:80]}", flush=True)
+                logger.info(f"[Amazon] Added: {name[:80]}")
             except Exception:
                 continue
 
@@ -175,5 +178,5 @@ def search_amazon_products(query_parts: list[str], max_results: int) -> list[Pro
         context.close()
         browser.close()
 
-    print(f"[Amazon] Search done | candidates={len(candidates)}", flush=True)
+    logger.info(f"[Amazon] Search done | candidates={len(candidates)}")
     return candidates

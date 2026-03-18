@@ -45,11 +45,11 @@ def render(title_text: str, out: dict) -> str:
 
 
 def run_once(text: str, label: str) -> dict:
-    print(f"[UI-Panel] Running: {label}", flush=True)
+    print(f"[UI-Panel] Running: {label}")
     out = run_procurement_agent(text, max_results_per_platform=max_results.value)
     parsed.object = out.get("parsed_request", {})
     results.object = render(label, out)
-    print(f"[UI-Panel] Done: {label}", flush=True)
+    print(f"[UI-Panel] Done: {label}")
     return out
 
 

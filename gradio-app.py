@@ -24,9 +24,9 @@ def _render(out: dict) -> str:
 
 
 def run(request_text: str, max_results: int):
-    print("[UI-Gradio] Running", flush=True)
+    print("[UI-Gradio] Running")
     out = run_procurement_agent(request_text, max_results_per_platform=max_results)
-    print("[UI-Gradio] Done", flush=True)
+    print("[UI-Gradio] Done")
     return out.get("parsed_request", {}), _render(out)
 
 

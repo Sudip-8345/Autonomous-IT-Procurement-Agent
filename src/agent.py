@@ -2,7 +2,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import re
 from typing import Any, TypedDict
-
+import logging
 from langgraph.graph import END, StateGraph
 
 from src.config import DEFAULT_MAX_RESULTS_PER_PLATFORM
@@ -12,6 +12,8 @@ from src.schemas import VerifiedProduct
 from src.scrapers.amazon import search_amazon_products
 from src.scrapers.flipkart import search_flipkart_products
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 class AgentState(TypedDict, total=False):
     request_text: str
@@ -29,19 +31,45 @@ def _build_graph():
     graph = StateGraph(AgentState)
 
     def _step(state: dict, message: str) -> list[str]:
-        print(message, flush=True)
+        logger.info(message)
         return [*state.get("steps", []), message]
 
     def parse_request(state: dict) -> dict:
         steps = _step(state, "[Agent] Step 1/3: Parsing request")
         req = parse_procurement_request(state["request_text"])
         values = req.model_dump()
-        parts = [str(v).strip() for k, v in values.items() if k != "raw_text" and v not in (None, "", [])]
-        if isinstance(values.get("brands_allowed"), list):
-            parts.extend(str(x).strip() for x in values["brands_allowed"] if str(x).strip())
+
+        def _to_parts(value: Any) -> list[str]:
+            if value in (None, ""):
+                return []
+            if isinstance(value, (int, float)):
+                return [str(value)]
+            if isinstance(value, str):
+                text = value.strip()
+                return [text] if text else []
+            if isinstance(value, list):
+                out: list[str] = []
+                for item in value:
+                    out.extend(_to_parts(item))
+                return out
+            if isinstance(value, dict):
+                out: list[str] = []
+                for key, item in value.items():
+                    out.extend(_to_parts(key))
+                    out.extend(_to_parts(item))
+                return out
+            return []
+
+        parts: list[str] = []
+        for key, value in values.items():
+            if key == "raw_text":
+                continue
+            parts.extend(_to_parts(value))
+
         query_parts = list(OrderedDict((p.lower(), p) for p in parts).values()) or [req.raw_text]
         steps.append(f"[Agent] Parsed request. Query parts: {len(query_parts)}")
         return {"parsed_request": req, "query_parts": query_parts, "errors": [], "steps": steps}
+
 
     def search_tools(state: dict) -> dict:
         steps = _step(state, "[Agent] Step 2/3: Running Amazon + Flipkart search")
@@ -65,6 +93,7 @@ def _build_graph():
         by_url = OrderedDict((item.url, item) for item in all_items)
         steps.append(f"[Agent] Deduplicated total: {len(by_url)}")
         return {"candidates": list(by_url.values()), "errors": errors, "steps": steps}
+
 
     def evaluate_and_sort(state: dict) -> dict:
         steps = _step(state, "[Agent] Step 3/3: Evaluating and sorting products")
@@ -96,10 +125,12 @@ def _build_graph():
     graph.add_node("parse_request", parse_request)
     graph.add_node("search_tools", search_tools)
     graph.add_node("evaluate_and_sort", evaluate_and_sort)
+    
     graph.set_entry_point("parse_request")
     graph.add_edge("parse_request", "search_tools")
     graph.add_edge("search_tools", "evaluate_and_sort")
     graph.add_edge("evaluate_and_sort", END)
+    
     return graph.compile()
 
 
@@ -107,7 +138,7 @@ _PROCUREMENT_GRAPH = _build_graph()
 
 
 def run_procurement_agent(request_text: str, max_results_per_platform: int | None = None) -> dict[str, Any]:
-    print("[Agent] Run started", flush=True)
+    logger.info("[Agent] Run started")
     out = _PROCUREMENT_GRAPH.invoke(
         {
             "request_text": request_text,
